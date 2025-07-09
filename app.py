@@ -635,9 +635,9 @@ def main():
                         txt_content = "CAS DE TEST\n\n"
                         txt_content += f"Généré le {datetime.now().strftime('%d/%m/%Y à %H:%M')}\n\n"
                         txt_content += "\n\n".join(
-                            "=== CAS DE TEST {} ===\n{}".format(i+1, re.sub(r'#+\s*|\*\*', '', case))
-                            for i, case in enumerate(st.session_state.test_cases)
-                        )
+    "=== CAS DE TEST {} ===\n{}".format(i+1, re.sub(r'#+\s*|\*\*', '', case))
+    for i, case in enumerate(st.session_state.test_cases)
+)
                         
                         st.download_button(
                             label="📄 Télécharger (.txt)",
