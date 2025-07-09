@@ -1,3 +1,14 @@
+# Gestion de spacy et du modèle français
+try:
+    import spacy
+    nlp = spacy.load("fr_core_news_sm")
+except ImportError:
+    import subprocess
+    import sys
+    subprocess.run([sys.executable, "-m", "spacy", "download", "fr_core_news_sm"])
+    import spacy
+    nlp = spacy.load("fr_core_news_sm")
+
 from utils.text_processing import is_similar
 from utils.text_processing import remove_duplicates
 try:
