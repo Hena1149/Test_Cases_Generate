@@ -635,7 +635,7 @@ def main():
                         txt_content = "CAS DE TEST\n\n"
                         txt_content += f"Généré le {datetime.now().strftime('%d/%m/%Y à %H:%M')}\n\n"
                         txt_content += "\n\n".join(
-                            f"=== CAS DE TEST {i+1} ===\n{re.sub(r'#+\s*|\*\*', '', case)}" 
+                            "=== CAS DE TEST {} ===\n{}".format(i+1, re.sub(r'#+\s*|\*\*', '', case))
                             for i, case in enumerate(st.session_state.test_cases)
                         )
                         
