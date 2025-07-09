@@ -9,30 +9,16 @@ except ImportError:
     import spacy
     nlp = spacy.load("fr_core_news_sm")
 
-from utils.text_processing import is_similar
-from utils.text_processing import remove_duplicates
-try:
-    import pyperclip
-    PYPERCLIP_AVAILABLE = True
-except ImportError:
-    PYPERCLIP_AVAILABLE = False
-
+from utils.text_processing import is_similar, remove_duplicates, generate_wordcloud, clean_text
+from utils.file_utils import process_uploaded_file, export_to_excel, export_test_cases_to_excel
+from utils.openai_utils import split_text, generate_rules, generate_checkpoints, generate_test_cases
+from collections import Counter
 import streamlit as st
 import os
 import tempfile
-from utils.file_utils import process_uploaded_file, export_to_excel, export_test_cases_to_excel
-from utils.text_processing import generate_wordcloud, clean_text
-from utils.openai_utils import (
-    split_text,
-    generate_rules, 
-    generate_checkpoints, 
-    generate_test_cases
-)
-from utils.text_processing import is_similar
-from collections import Counter
 import io
 from docx import Document
-import re 
+import re
 from difflib import SequenceMatcher
 from datetime import datetime
 import PyPDF2
@@ -93,17 +79,11 @@ def show_progress(current, total, message):
     progress = current / total
     percent = int(progress * 100)
     progress_bar = st.progress(progress)
-    
-    # Texte plus détaillé avec pourcentage et compteur
-    progress_text = f"{percent}% - {message} ({current}/{total})"
-    
-    # Mise à jour de la barre
+    progress_text = "{}% - {} ({}/{})".format(percent, message, current, total)
     progress_bar.progress(progress, text=progress_text)
-    
-    # Nettoyage quand terminé
     if current == total:
         progress_bar.empty()
-        st.toast(f"Tâche terminée : {message}", icon="✅")
+        st.toast("Tâche terminée : {}".format(message), icon="✅")
 
 def main():
     st.title("Génération automatique des cas de tests")
@@ -115,14 +95,17 @@ def main():
     """)
 
     # Initialisation des variables de session
-    if 'text' not in st.session_state:
-        st.session_state.text = ""
-    if 'rules' not in st.session_state:
-        st.session_state.rules = []
-    if 'checkpoints' not in st.session_state:
-        st.session_state.checkpoints = []
-    if 'test_cases' not in st.session_state:
-        st.session_state.test_cases = []
+    session_defaults = {
+        'text': "",
+        'rules': [],
+        'checkpoints': [],
+        'test_cases': [],
+        'existing_checkpoints': []
+    }
+    
+    for key, value in session_defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
 
     # Sidebar pour les paramètres
     with st.sidebar:
@@ -130,7 +113,6 @@ def main():
         st.session_state.openai_key = st.text_input("Clé API OpenAI", type="password")
         st.session_state.openai_endpoint = st.text_input("Endpoint Azure OpenAI", "https://chat-genai.openai.azure.com/")
         st.session_state.model_name = st.selectbox("Modèle", ["gpt-4o", "gpt-35-turbo"])
-        
         st.divider()
         st.info("Configurez votre clé API et endpoint avant de commencer.")
 
@@ -177,11 +159,11 @@ def main():
             top_words = freq_dist.most_common(10)
             
             for word, freq in top_words:
-                st.markdown(f"- **{word}**: {freq} occurrences")
+                st.markdown("- **{}**: {} occurrences".format(word, freq))
             
             st.download_button(
                 label="Télécharger l'analyse",
-                data="\n".join([f"{w}: {f}" for w, f in top_words]),
+                data="\n".join(["{}: {}".format(w, f) for w, f in top_words]),
                 file_name="frequence_mots.txt",
                 key="download_word_freq"
             )
@@ -200,7 +182,7 @@ def main():
                     for i, chunk in enumerate(chunks, 1):
                         progress = i / len(chunks)
                         percent = int(progress * 100)
-                        progress_bar.progress(progress, text=f"{percent}% - Traitement chunk {i}/{len(chunks)}")
+                        progress_bar.progress(progress, text="{}% - Traitement chunk {}/{}".format(percent, i, len(chunks)))
                         rules = generate_rules(
                             chunk,
                             st.session_state.openai_key,
@@ -211,16 +193,15 @@ def main():
                     
                     st.session_state.rules = [rule.strip() for rule in all_rules if rule.strip()]
                     progress_bar.empty()
-                    st.success(f"{len(st.session_state.rules)} règles générées avec succès !")
+                    st.success("{} règles générées avec succès !".format(len(st.session_state.rules)))
                 except Exception as e:
-                    st.error(f"Erreur lors de la génération : {str(e)}")
-        
+                    st.error("Erreur lors de la génération : {}".format(str(e)))
+
         # Affichage et export des règles
-        if hasattr(st.session_state, 'rules') and st.session_state.rules:
+        if st.session_state.rules:
             st.divider()
             
-            # Aperçu interactif
-            with st.expander(f"Aperçu des {len(st.session_state.rules)} règles", expanded=True):
+            with st.expander("Aperçu des {} règles".format(len(st.session_state.rules)), expanded=True):
                 show_rules = st.slider(
                     "Nombre de règles à afficher",
                     5, min(50, len(st.session_state.rules)), 10,
@@ -228,14 +209,15 @@ def main():
                 )
                 
                 for i, rule in enumerate(st.session_state.rules[:show_rules], 1):
-                    st.markdown(f"**{i}.** {rule}")
+                    st.markdown("**{}.** {}".format(i, rule))
                 
                 if len(st.session_state.rules) > show_rules:
-                    st.info(f"Affichage de {show_rules}/{len(st.session_state.rules)} règles")
+                    st.info("Affichage de {}/{} règles".format(show_rules, len(st.session_state.rules)))
             
             # Export multi-format
             st.subheader("Exporter les règles")
-            export_format = st.radio("Format d'export", ["Word (.docx)", "Texte (.txt)", "Excel (.xlsx)"], horizontal=True, key="rules_export_format")
+            export_format = st.radio("Format d'export", ["Word (.docx)", "Texte (.txt)", "Excel (.xlsx)"], 
+                                   horizontal=True, key="rules_export_format")
             
             if export_format == "Word (.docx)":
                 try:
@@ -257,12 +239,12 @@ def main():
                         key="download_rules_docx"
                     )
                 except Exception as e:
-                    st.error(f"Erreur DOCX : {str(e)}")
+                    st.error("Erreur DOCX : {}".format(str(e)))
             
             elif export_format == "Texte (.txt)":
                 try:
                     txt_content = "RÈGLES DE GESTION\n\n" + \
-                                "\n".join(f"{i+1}. {r}" for i, r in enumerate(st.session_state.rules))
+                                "\n".join("{}. {}".format(i+1, r) for i, r in enumerate(st.session_state.rules))
                     
                     st.download_button(
                         label="Télécharger (.txt)",
@@ -272,7 +254,7 @@ def main():
                         key="download_rules_txt"
                     )
                 except Exception as e:
-                    st.error(f"Erreur TXT : {str(e)}")
+                    st.error("Erreur TXT : {}".format(str(e)))
             
             elif export_format == "Excel (.xlsx)":
                 try:
@@ -285,7 +267,7 @@ def main():
                         key="download_rules_excel"
                     )
                 except Exception as e:
-                    st.error(f"Erreur Excel : {str(e)}")
+                    st.error("Erreur Excel : {}".format(str(e)))
 
     with tab3:
         st.header("Points de Contrôle", divider="blue")
@@ -294,48 +276,38 @@ def main():
             st.warning("Veuillez d'abord charger un document dans l'onglet Upload.")
             st.stop()
         
-        # Nouvelle section pour la génération directe à partir du texte
+        # Génération directe à partir du texte
         st.subheader("Génération directe à partir du texte")
-        col_gen1, col_gen2 = st.columns([3, 1])
-        
-        with col_gen1:
-            if st.button("Générer les points de contrôle à partir du texte", 
-                        type="primary",
-                        key="gen_cp_from_text"):
-                with st.spinner("Analyse du texte pour générer les points de contrôle..."):
-                    try:
-                        progress_bar = st.progress(0, text="0% - Préparation...")
+        if st.button("Générer les points de contrôle à partir du texte", 
+                    type="primary",
+                    key="gen_cp_from_text"):
+            with st.spinner("Analyse du texte pour générer les points de contrôle..."):
+                try:
+                    progress_bar = st.progress(0, text="0% - Préparation...")
+                    chunks = [st.session_state.text[i:i+4000] for i in range(0, len(st.session_state.text), 4000)]
+                    all_points = []
+                    
+                    for i, chunk in enumerate(chunks):
+                        percent = int((i + 1) / len(chunks) * 100)
+                        progress_bar.progress(percent / 100, text="{}% - Traitement du chunk {}/{}".format(percent, i+1, len(chunks)))
                         
-                        # Découpage du texte en chunks
-                        chunks = [st.session_state.text[i:i+4000] for i in range(0, len(st.session_state.text), 4000)]
-                        all_points = []
-                        
-                        for i, chunk in enumerate(chunks):
-                            # Mise à jour de la barre de progression
-                            percent = int((i + 1) / len(chunks) * 100)
-                            progress_bar.progress(percent / 100, text=f"{percent}% - Traitement du chunk {i+1}/{len(chunks)}")
-                            
-                            # Génération des points pour chaque chunk
-                            points = generate_checkpoints(
-                                [chunk],  # On passe le chunk comme une "règle"
-                                st.session_state.openai_key,
-                                st.session_state.openai_endpoint,
-                                st.session_state.model_name
-                            )
-                            all_points.extend(points)
-                        
-                        # Suppression des doublons
-                        existing_points = getattr(st.session_state, 'existing_checkpoints', [])
-                        final_points = remove_duplicates(all_points, existing_points)
-                        
-                        st.session_state.checkpoints = existing_points + final_points
-                        st.success(f"{len(final_points)} points de contrôle générés directement à partir du texte !")
-                    except Exception as e:
-                        st.error(f"Échec de la génération : {str(e)}")
-                    finally:
-                        progress_bar.empty()
+                        points = generate_checkpoints(
+                            [chunk],
+                            st.session_state.openai_key,
+                            st.session_state.openai_endpoint,
+                            st.session_state.model_name
+                        )
+                        all_points.extend(points)
+                    
+                    final_points = remove_duplicates(all_points, st.session_state.existing_checkpoints)
+                    st.session_state.checkpoints = st.session_state.existing_checkpoints + final_points
+                    st.success("{} points de contrôle générés directement à partir du texte !".format(len(final_points)))
+                except Exception as e:
+                    st.error("Échec de la génération : {}".format(str(e)))
+                finally:
+                    progress_bar.empty()
 
-        # Conserver la section existante pour la génération à partir des règles
+        # Génération à partir des règles
         st.divider()
         st.subheader("Génération à partir des règles de gestion")
         
@@ -349,16 +321,13 @@ def main():
                     try:
                         progress_bar = st.progress(0, text="0% - Préparation...")
                         total_rules = len(st.session_state.rules)
-                        
-                        # Génération avec progression
                         new_points = []
                         batch_size = 5
                         
                         for i in range(0, total_rules, batch_size):
-                            # Mise à jour de la progression
                             processed = min(i + batch_size, total_rules)
                             percent = int(processed / total_rules * 100)
-                            progress_bar.progress(percent / 100, text=f"{percent}% - Traitement des règles {processed}/{total_rules}")
+                            progress_bar.progress(percent / 100, text="{}% - Traitement des règles {}/{}".format(percent, processed, total_rules))
                             
                             batch = st.session_state.rules[i:i + batch_size]
                             points = generate_checkpoints(
@@ -369,17 +338,15 @@ def main():
                             )
                             new_points.extend(points)
                         
-                        existing_points = getattr(st.session_state, 'existing_checkpoints', [])
-                        final_points = remove_duplicates(new_points, existing_points)
-                        
-                        st.session_state.checkpoints = existing_points + final_points
-                        st.success(f"{len(final_points)} points de contrôle générés à partir des règles !")
+                        final_points = remove_duplicates(new_points, st.session_state.existing_checkpoints)
+                        st.session_state.checkpoints = st.session_state.existing_checkpoints + final_points
+                        st.success("{} points de contrôle générés à partir des règles !".format(len(final_points)))
                     except Exception as e:
-                        st.error(f"Échec de la génération : {str(e)}")
+                        st.error("Échec de la génération : {}".format(str(e)))
                     finally:
                         progress_bar.empty()
 
-        # Section d'import des points existants
+        # Import des points existants
         st.subheader("Importer des points existants (facultatif)")
         existing_cp_file = st.file_uploader(
             "Téléverser un fichier de points existants",
@@ -391,7 +358,6 @@ def main():
         if existing_cp_file:
             with st.spinner("Analyse du fichier en cours..."):
                 try:
-                    # Extraction du contenu brut
                     if existing_cp_file.type == "text/plain":
                         content = existing_cp_file.getvalue().decode("utf-8")
                     elif existing_cp_file.type == "application/pdf":
@@ -401,7 +367,6 @@ def main():
                         doc = Document(existing_cp_file)
                         content = "\n".join([para.text for para in doc.paragraphs])
                 
-                    # Extraction des points
                     pattern = r"^(Vérifier|S['']?assurer|Verifier|►|•|\d+[.)])\s+"
                     points = []
                     for line in content.split('\n'):
@@ -413,17 +378,16 @@ def main():
                 
                     if points:
                         st.session_state.existing_checkpoints = points
-                        st.success(f"✅ {len(points)} points valides détectés")
+                        st.success("✅ {} points valides détectés".format(len(points)))
                     else:
                         st.warning("Aucun point de contrôle valide détecté dans le fichier")
                 except Exception as e:
-                    st.error(f"Erreur lors de l'extraction : {str(e)}")
+                    st.error("Erreur lors de l'extraction : {}".format(str(e)))
 
         # Visualisation des points
-        if hasattr(st.session_state, 'checkpoints') and st.session_state.checkpoints:
+        if st.session_state.checkpoints:
             st.subheader("Visualisation des points")
             
-            # Outils de filtrage
             with st.expander("Filtres", expanded=False):
                 search_term = st.text_input("Recherche textuelle", key="cp_search")
                 col_sort, col_filter = st.columns(2)
@@ -432,67 +396,66 @@ def main():
                 with col_filter:
                     filter_type = st.selectbox("Filtrer par", ["Tous", "Existants uniquement", "Nouveaux uniquement"], key="filter_type_cp")
             
-            # Application des filtres
             filtered_points = st.session_state.checkpoints.copy()
             
             if search_term:
                 filtered_points = [p for p in filtered_points if search_term.lower() in p.lower()]
             
             if filter_type == "Existants uniquement":
-                existing_points = getattr(st.session_state, 'existing_checkpoints', [])
-                filtered_points = [p for p in filtered_points if p in existing_points]
+                filtered_points = [p for p in filtered_points if p in st.session_state.existing_checkpoints]
             elif filter_type == "Nouveaux uniquement":
-                existing_points = getattr(st.session_state, 'existing_checkpoints', [])
-                filtered_points = [p for p in filtered_points if p not in existing_points]
+                filtered_points = [p for p in filtered_points if p not in st.session_state.existing_checkpoints]
             
             if sort_order == "Ordre alphabétique":
                 filtered_points.sort(key=lambda x: x.lower())
             
-            # Pagination
             items_per_page = st.slider("Points par page", 5, 50, 10, key="cp_per_page")
             total_pages = max(1, (len(filtered_points) + items_per_page - 1) // items_per_page)
             page = st.number_input("Page", 1, total_pages, 1, key="cp_page")
             start_idx = (page - 1) * items_per_page
             end_idx = start_idx + items_per_page
             
-            # Affichage
             for i, point in enumerate(filtered_points[start_idx:end_idx], start=start_idx+1):
-                is_existing = hasattr(st.session_state, 'existing_checkpoints') and \
-                            point in st.session_state.existing_checkpoints
+                is_existing = point in st.session_state.existing_checkpoints
                 
-                st.markdown(f"""
+                st.markdown("""
                 <div style='
                     padding:10px;
                     margin:5px 0;
-                    border-left:4px solid {"#4CAF50" if not is_existing else "#2196F3"};
+                    border-left:4px solid {};
                     background:#f8f9fa;
                     border-radius:5px;
                     box-shadow:0 1px 2px rgba(0,0,0,0.1)'
                 >
                     <div style='font-weight:bold; margin-bottom:3px'>
-                        Point {i} {"(nouveau)" if not is_existing else "(existant)"}
+                        Point {} {}
                     </div>
-                    <div>{point}</div>
+                    <div>{}</div>
                 </div>
-                """, unsafe_allow_html=True)
+                """.format("#4CAF50" if not is_existing else "#2196F3",
+                          i,
+                          "(nouveau)" if not is_existing else "(existant)",
+                          point), unsafe_allow_html=True)
             
-            st.caption(f"Page {page}/{total_pages} • {len(filtered_points)} points filtrés • {len(st.session_state.checkpoints)} points au total")
+            st.caption("Page {}/{} • {} points filtrés • {} points au total".format(
+                page, total_pages, len(filtered_points), len(st.session_state.checkpoints)))
 
             # Export des points
             st.subheader("Exporter les points")
-            export_format = st.radio("Format d'export", ["Word (.docx)", "Texte (.txt)", "Excel (.xlsx)"], horizontal=True, key="cp_export_format")
+            export_format = st.radio("Format d'export", ["Word (.docx)", "Texte (.txt)", "Excel (.xlsx)"], 
+                                   horizontal=True, key="cp_export_format")
             
             if export_format == "Word (.docx)":
                 try:
                     doc = Document()
                     doc.add_heading('Points de Contrôle', level=1)
                     
-                    if hasattr(st.session_state, 'existing_checkpoints') and st.session_state.existing_checkpoints:
+                    if st.session_state.existing_checkpoints:
                         doc.add_heading('Points Existants', level=2)
                         for point in st.session_state.existing_checkpoints:
                             doc.add_paragraph(point, style='ListBullet')
                     
-                    existing_set = set(getattr(st.session_state, 'existing_checkpoints', []))
+                    existing_set = set(st.session_state.existing_checkpoints)
                     new_points = [p for p in st.session_state.checkpoints if p not in existing_set]
                     
                     if new_points:
@@ -512,23 +475,23 @@ def main():
                         key="download_cp_docx"
                     )
                 except Exception as e:
-                    st.error(f"Erreur DOCX : {str(e)}")
+                    st.error("Erreur DOCX : {}".format(str(e)))
             
             elif export_format == "Texte (.txt)":
                 try:
                     content = "POINTS DE CONTRÔLE\n\n"
-                    content += f"Généré le {datetime.now().strftime('%d/%m/%Y à %H:%M')}\n\n"
+                    content += "Généré le {}\n\n".format(datetime.now().strftime('%d/%m/%Y à %H:%M'))
                     
-                    if hasattr(st.session_state, 'existing_checkpoints') and st.session_state.existing_checkpoints:
+                    if st.session_state.existing_checkpoints:
                         content += "=== POINTS EXISTANTS ===\n"
-                        content += "\n".join(f"• {p}" for p in st.session_state.existing_checkpoints) + "\n\n"
+                        content += "\n".join("• {}".format(p) for p in st.session_state.existing_checkpoints) + "\n\n"
                     
-                    existing_set = set(getattr(st.session_state, 'existing_checkpoints', []))
+                    existing_set = set(st.session_state.existing_checkpoints)
                     new_points = [p for p in st.session_state.checkpoints if p not in existing_set]
                     
                     if new_points:
                         content += "=== NOUVEAUX POINTS ===\n"
-                        content += "\n".join(f"• {p}" for p in new_points)
+                        content += "\n".join("• {}".format(p) for p in new_points)
                     
                     st.download_button(
                         label="Télécharger le TXT",
@@ -538,7 +501,7 @@ def main():
                         key="download_cp_txt"
                     )
                 except Exception as e:
-                    st.error(f"Erreur TXT : {str(e)}")
+                    st.error("Erreur TXT : {}".format(str(e)))
             
             elif export_format == "Excel (.xlsx)":
                 try:
@@ -551,7 +514,7 @@ def main():
                         key="download_cp_excel"
                     )
                 except Exception as e:
-                    st.error(f"Erreur Excel : {str(e)}")
+                    st.error("Erreur Excel : {}".format(str(e)))
 
     with tab4:
         st.header("Cas de Test")
@@ -566,15 +529,12 @@ def main():
                     try:
                         progress_bar = st.progress(0, text="0% - Préparation...")
                         st.session_state.test_cases = []
-                        
-                        # Initialisation de la barre de progression
                         total = len(st.session_state.checkpoints)
                         
-                        # Génération des cas de test avec progression
                         test_cases = []
                         for i, checkpoint in enumerate(st.session_state.checkpoints, 1):
                             percent = int(i / total * 100)
-                            progress_bar.progress(percent / 100, text=f"{percent}% - Génération du cas {i}/{total}")
+                            progress_bar.progress(percent / 100, text="{}% - Génération du cas {}/{}".format(percent, i, total))
                             
                             test_case = generate_test_cases(
                                 [checkpoint],
@@ -586,16 +546,15 @@ def main():
                         
                         st.session_state.test_cases = test_cases
                         progress_bar.empty()
-                        st.success(f"{len(st.session_state.test_cases)} cas de test générés !")
+                        st.success("{} cas de test générés !".format(len(st.session_state.test_cases)))
                     except Exception as e:
-                        st.error(f"Erreur de génération : {str(e)}")
+                        st.error("Erreur de génération : {}".format(str(e)))
 
-            # Affichage des résultats
-            if hasattr(st.session_state, 'test_cases') and st.session_state.test_cases:
+            if st.session_state.test_cases:
                 selected_case = st.selectbox(
                     "Sélectionnez un cas à visualiser",
                     range(len(st.session_state.test_cases)),
-                    format_func=lambda x: f"Cas de test #{x+1}",
+                    format_func=lambda x: "Cas de test #{}".format(x+1),
                     key="select_test_case"
                 )
                 
@@ -603,7 +562,8 @@ def main():
                 
                 # Export
                 st.subheader("Exporter les cas de test")
-                export_format = st.radio("Format d'export", ["Word (.docx)", "Texte (.txt)", "Excel (.xlsx)"], horizontal=True, key="test_export_format")
+                export_format = st.radio("Format d'export", ["Word (.docx)", "Texte (.txt)", "Excel (.xlsx)"], 
+                                       horizontal=True, key="test_export_format")
                 
                 if export_format == "Word (.docx)":
                     try:
@@ -613,7 +573,7 @@ def main():
                         for i, test_case in enumerate(st.session_state.test_cases, 1):
                             cleaned_text = re.sub(r'#+\s*', '', test_case)
                             cleaned_text = re.sub(r'\*\*(.*?)\*\*', r'\1', cleaned_text)
-                            doc.add_paragraph(f"Cas de test {i}", style='Heading2')
+                            doc.add_paragraph("Cas de test {}".format(i), style='Heading2')
                             doc.add_paragraph(cleaned_text)
                         
                         docx_bytes = io.BytesIO()
@@ -628,16 +588,16 @@ def main():
                             key="download_tests_docx"
                         )
                     except Exception as e:
-                        st.error(f"Erreur DOCX : {str(e)}")
+                        st.error("Erreur DOCX : {}".format(str(e)))
                 
                 elif export_format == "Texte (.txt)":
                     try:
                         txt_content = "CAS DE TEST\n\n"
-                        txt_content += f"Généré le {datetime.now().strftime('%d/%m/%Y à %H:%M')}\n\n"
+                        txt_content += "Généré le {}\n\n".format(datetime.now().strftime('%d/%m/%Y à %H:%M'))
                         txt_content += "\n\n".join(
-    "=== CAS DE TEST {} ===\n{}".format(i+1, re.sub(r'#+\s*|\*\*', '', case))
-    for i, case in enumerate(st.session_state.test_cases)
-)
+                            "=== CAS DE TEST {} ===\n{}".format(i+1, re.sub(r'#+\s*|\*\*', '', case))
+                            for i, case in enumerate(st.session_state.test_cases)
+                        )
                         
                         st.download_button(
                             label="📄 Télécharger (.txt)",
@@ -647,7 +607,7 @@ def main():
                             key="download_tests_txt"
                         )
                     except Exception as e:
-                        st.error(f"Erreur TXT : {str(e)}")
+                        st.error("Erreur TXT : {}".format(str(e)))
                 
                 elif export_format == "Excel (.xlsx)":
                     try:
@@ -660,7 +620,7 @@ def main():
                             key="download_tests_excel"
                         )
                     except Exception as e:
-                        st.error(f"Erreur Excel : {str(e)}")
+                        st.error("Erreur Excel : {}".format(str(e)))
 
 if __name__ == "__main__":
     main()
