@@ -1,14 +1,18 @@
-# Gestion de spacy et du modèle français
+# Chargement du modèle spaCy avec gestion d'erreur améliorée
 try:
     import spacy
-    nlp = spacy.load("fr_core_news_sm")
-except ImportError:
-    import subprocess
-    import sys
-    subprocess.run([sys.executable, "-m", "spacy", "download", "fr_core_news_sm"])
-    import spacy
-    nlp = spacy.load("fr_core_news_sm")
+    try:
+        nlp = spacy.load("fr_core_news_sm")
+    except OSError:
+        import subprocess
+        import sys
+        subprocess.run([sys.executable, "-m", "spacy", "download", "fr_core_news_sm"], check=True)
+        nlp = spacy.load("fr_core_news_sm")
+except Exception as e:
+    st.error(f"Erreur de chargement du modèle spaCy: {str(e)}")
+    nlp = None  # Gestion élégante si le modèle ne peut pas être chargé
 
+# Autres imports
 from utils.text_processing import is_similar, remove_duplicates, generate_wordcloud, clean_text
 from utils.file_utils import process_uploaded_file, export_to_excel, export_test_cases_to_excel
 from utils.openai_utils import split_text, generate_rules, generate_checkpoints, generate_test_cases
